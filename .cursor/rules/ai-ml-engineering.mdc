@@ -1,0 +1,20 @@
+---
+description: AI and ML correctness, evaluation, safety, and production rules
+globs: "**/*.{py,ipynb}"
+alwaysApply: false
+---
+
+# AI/ML Engineering
+
+- Use ML only after defining the decision, target, prediction time, error costs, and deterministic baseline.
+- Prevent leakage with point-in-time correct features and time-based dataset splits.
+- Version source snapshots, labels, features, code, parameters, and model artifacts.
+- Evaluate against simple and current-production baselines.
+- Report performance by time period, vendor, store, category, and other relevant segments.
+- Match metrics to business costs; accuracy alone is not sufficient.
+- Measure uncertainty and calibration when scores trigger business actions.
+- Require human approval for pricing, ad spend, catalog removal, and high-impact supplier actions.
+- Monitor data freshness, feature drift, prediction drift, and realized outcomes.
+- Provide a tested rollback path and deterministic fallback.
+- Do not train on customer PII without documented purpose, approval, retention, and access controls.
+- Never claim causation from observational correlations or temporal coincidence.

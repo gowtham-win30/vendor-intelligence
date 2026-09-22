@@ -1,0 +1,19 @@
+---
+description: Non-negotiable production architecture and correctness rules
+alwaysApply: true
+---
+
+# Production Architecture
+
+- Treat this project as a production data product, not a local script collection.
+- Correctness, reproducibility, security, and operability take priority over delivery speed.
+- Preserve immutable raw source data; clean and reinterpret data only downstream.
+- Every source and output must define schema, grain, key, units, timezone, null policy, freshness, and owner.
+- Pipeline retries must be idempotent and publication must be atomic.
+- Do not commit credentials, use working secret defaults, or expose PII in logs and reports.
+- Separate connectors, validation, transformations, metrics, reporting, and orchestration.
+- CLI entry points delegate to testable domain functions and contain no metric logic.
+- Reject unexpected schema drift and quarantine invalid records with explicit reason codes.
+- Record run IDs, code/config versions, watermarks, row counts, quality results, and failures.
+- Do not call a change production-ready without tests, observability, rollback, and staging verification.
+- Keep architecture decisions and KPI behavior documented under `docs/`.

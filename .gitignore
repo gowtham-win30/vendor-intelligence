@@ -1,0 +1,41 @@
+.env
+.env.*
+!.env.example
+.venv/
+.venv-*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+
+# Generated data products may contain commercially sensitive source data.
+reports/*.csv
+reports/validation/*.csv
+reports/data_quality_profile_summary.md
+eda/parts_eda_report.md
+
+# Local Streamlit credentials and overrides.
+.streamlit/secrets.toml
+
+# Proprietary source data and captured agent outputs (do not publish).
+*.xlsx
+*.pdf
+conversation_*.txt
+
+# Kept local only; excluded from the code repository.
+/docs/
+/eda/
+/dashboard/
+/reports/
+/phase1_achievability_assessment.md
+/phase1_complete_kpi_framework.csv

@@ -1,0 +1,21 @@
+---
+description: Production Python implementation standards
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Production Standards
+
+- Use typed configuration validated at startup; read secrets from runtime configuration only.
+- Keep functions focused and make business rules pure where practical.
+- Isolate database and network access behind explicit interfaces.
+- Use context managers for connections, cursors, files, and transactions.
+- Use fixed-precision decimal values for money; do not use floats.
+- Raise domain-specific exceptions with preserved causes; never use empty or broad silent catches.
+- Emit structured logs with run/source context and without credentials or customer PII.
+- Make retries bounded and limited to transient failures; never retry deterministic validation errors.
+- Make write operations idempotent and transaction boundaries explicit.
+- Validate inputs at system boundaries and fail closed on incompatible schemas.
+- Add unit tests for normal, boundary, invalid, and retry behavior.
+- Avoid global mutable state, import-time I/O, and hardcoded local paths.
+- CLI modules parse arguments and call application services; they do not implement transformations.

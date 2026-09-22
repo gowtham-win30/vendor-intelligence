@@ -1,0 +1,22 @@
+---
+description: SQL transformation, data quality, and KPI correctness standards
+globs: "**/*.sql"
+alwaysApply: false
+---
+
+# SQL and Data Correctness
+
+- Declare the grain and business key of every produced table or view.
+- Preserve raw values; apply normalization only in staging, clean, or conformed layers.
+- Deduplicate with a documented key and deterministic tie-breaker.
+- Never use `DISTINCT` to hide unexplained duplicate or join multiplication problems.
+- Report matched, unmatched, and multiply-matched rates for important joins.
+- Do not convert null quantities, prices, or dates to zero without an approved semantic rule.
+- Use `NUMERIC`/`DECIMAL` for money and document units.
+- Handle timestamps with an explicit timezone and observation window.
+- Filter or quarantine invalid records with reason codes and counts.
+- Add uniqueness, not-null, accepted-value, freshness, and reconciliation tests.
+- KPI SQL must match a versioned specification with formula, grain, exclusions, and edge cases.
+- Publish new data atomically after quality gates pass.
+- Index keys used by joins, filters, uniqueness checks, and serving queries.
+- Avoid destructive DDL in routine transformations unless rollback and recovery are explicit.
