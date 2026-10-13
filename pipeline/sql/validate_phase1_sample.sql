@@ -83,7 +83,7 @@ SELECT
     sample_priority,
     sample_reason,
     sku,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS selected_at
 FROM (
     SELECT * FROM top_score

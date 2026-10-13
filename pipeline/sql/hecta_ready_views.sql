@@ -38,10 +38,7 @@ SELECT
     k.sku,
     COALESCE(c.product_name, k.product_name) AS product_name,
     COALESCE(c.canonical_manufacturer, k.manufacturer) AS manufacturer,
-    COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
-        k.inferred_category_segment
-    ) AS category_segment,
+    COALESCE(c.google_product_category, k.inferred_category_segment) AS category_segment,
     c.google_product_category IS NOT NULL AS category_is_authoritative,
     c.google_product_category,
     k.historical_vendor_count,
@@ -73,6 +70,9 @@ SELECT
         'NOT_IN_INTEGRATED_FEEDS'
     ) AS current_catalog_status,
     c.current_inventory_quantity,
+    c.network_inventory_quantity,
+    c.inventory_quantity_basis,
+    k.is_non_product_sku,
     c.inventory_store_count,
     c.catalog_store_count,
     c.minimum_current_retail_price,
@@ -99,10 +99,7 @@ SELECT
     t.sku,
     COALESCE(c.product_name, t.product_name) AS product_name,
     COALESCE(c.canonical_manufacturer, t.manufacturer) AS manufacturer,
-    COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
-        t.inferred_category_segment
-    ) AS category_segment,
+    COALESCE(c.google_product_category, t.inferred_category_segment) AS category_segment,
     c.google_product_category IS NOT NULL AS category_is_authoritative,
     t.historical_vendor_count,
     t.fresh_vendor_count,
@@ -145,10 +142,7 @@ SELECT
     g.sku,
     COALESCE(c.product_name, g.product_name) AS product_name,
     COALESCE(c.canonical_manufacturer, g.manufacturer) AS manufacturer,
-    COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
-        g.inferred_category_segment
-    ) AS category_segment,
+    COALESCE(c.google_product_category, g.inferred_category_segment) AS category_segment,
     c.google_product_category IS NOT NULL AS category_is_authoritative,
     g.historical_vendor_count,
     g.valid_depleted_units AS historical_valid_depleted_units,
@@ -181,10 +175,7 @@ CREATE OR REPLACE VIEW analytics_hecta.catalog_visibility_candidates AS
 SELECT
     n.sku,
     COALESCE(c.canonical_manufacturer, n.manufacturer) AS manufacturer,
-    COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
-        n.inferred_category_segment
-    ) AS category_segment,
+    COALESCE(c.google_product_category, n.inferred_category_segment) AS category_segment,
     c.google_product_category IS NOT NULL AS category_is_authoritative,
     n.historical_vendor_count,
     n.valid_depleted_units AS historical_valid_depleted_units,
@@ -207,6 +198,54 @@ SELECT
     n.limitation AS usage_limitation
 FROM analytics.no_observed_movement_candidates n
 LEFT JOIN analytics.sku_catalog_current c USING (sku);
+
+CREATE OR REPLACE VIEW analytics_hecta.sales_daily AS
+SELECT
+    period_start AS sale_date,
+    period_end,
+    source_store,
+    valid_units_sold,
+    valid_revenue,
+    orders,
+    distinct_skus_sold,
+    period_is_complete,
+    kpi_spec_version,
+    data_cutoff_date,
+    usage_limitation
+FROM analytics.sales_period_summary
+WHERE period_grain = 'DAY';
+
+CREATE OR REPLACE VIEW analytics_hecta.sales_weekly AS
+SELECT
+    period_start AS week_start,
+    period_end AS week_end,
+    source_store,
+    valid_units_sold,
+    valid_revenue,
+    orders,
+    distinct_skus_sold,
+    period_is_complete,
+    kpi_spec_version,
+    data_cutoff_date,
+    usage_limitation
+FROM analytics.sales_period_summary
+WHERE period_grain = 'WEEK';
+
+CREATE OR REPLACE VIEW analytics_hecta.sales_monthly AS
+SELECT
+    period_start AS month_start,
+    period_end AS month_end,
+    source_store,
+    valid_units_sold,
+    valid_revenue,
+    orders,
+    distinct_skus_sold,
+    period_is_complete,
+    kpi_spec_version,
+    data_cutoff_date,
+    usage_limitation
+FROM analytics.sales_period_summary
+WHERE period_grain = 'MONTH';
 
 CREATE OR REPLACE VIEW analytics_hecta.monthly_trends AS
 SELECT
@@ -265,12 +304,14 @@ SELECT
     c.product_name,
     c.canonical_manufacturer AS manufacturer,
     c.canonical_brand AS brand,
-    'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category AS category_segment,
+    c.google_product_category AS category_segment,
     c.google_product_category,
     c.inventory_store_count,
     c.catalog_store_count,
     c.catalog_stores,
     c.current_inventory_quantity,
+    c.network_inventory_quantity,
+    c.inventory_quantity_basis,
     c.current_inventory_status,
     c.current_catalog_status,
     c.minimum_current_retail_price,
@@ -291,7 +332,7 @@ SELECT
     c.sku,
     c.product_name,
     c.canonical_manufacturer AS manufacturer,
-    'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category AS category_segment,
+    c.google_product_category AS category_segment,
     c.inventory_store_count,
     c.catalog_store_count,
     c.current_inventory_quantity,
@@ -341,7 +382,7 @@ COMMENT ON SCHEMA analytics_hecta IS
 COMMENT ON VIEW analytics_hecta.daily_command_center IS
     'One row per analytics refresh cutoff; historical cumulative measures only.';
 COMMENT ON VIEW analytics_hecta.sku_intelligence IS
-    'One row per normalized SKU; current inventory and catalog status are unavailable.';
+    'One row per normalized SKU with historical KPIs plus mapped current catalog and inventory context.';
 COMMENT ON VIEW analytics_hecta.ad_priority_candidates IS
     'Up to 200 historical ad-review candidates; no automated budget action.';
 COMMENT ON VIEW analytics_hecta.movement_vs_sales_gap IS
@@ -350,6 +391,12 @@ COMMENT ON VIEW analytics_hecta.catalog_visibility_candidates IS
     'One row per historical no-observed-movement candidate; not a demotion list.';
 COMMENT ON VIEW analytics_hecta.monthly_trends IS
     'One row per inferred category segment and calendar month.';
+COMMENT ON VIEW analytics_hecta.sales_daily IS
+    'One row per storefront or NETWORK and calendar day of observed storefront sales.';
+COMMENT ON VIEW analytics_hecta.sales_weekly IS
+    'One row per storefront or NETWORK and ISO week of observed storefront sales.';
+COMMENT ON VIEW analytics_hecta.sales_monthly IS
+    'One row per storefront or NETWORK and calendar month of observed storefront sales.';
 COMMENT ON VIEW analytics_hecta.source_health IS
     'One row per vendor or storefront source.';
 COMMENT ON VIEW analytics_hecta.data_quality_health IS

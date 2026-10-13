@@ -16,21 +16,14 @@ WITH ranked AS (
         ingested_at,
         ROW_NUMBER() OVER (
             PARTITION BY
-    source_store,
-    source_table,
-    order_id,
-    customer_email,
+                source_store,
+                source_table,
+                order_id,
                 UPPER(TRIM(sku)),
-    created_at,
+                created_at,
                 qty_ordered,
                 price,
-    region,
-    postcode,
-    company,
-    customer_first_name,
-    customer_last_name,
-    phone,
-    product_name
+                product_name
             ORDER BY ingested_at
         ) AS exact_duplicate_rank
 FROM raw.sales_orders
@@ -268,7 +261,9 @@ SELECT
     COALESCE(
         SUM(quantity) FILTER (WHERE quantity >= 0),
         0
-    ) AS current_inventory_quantity,
+    ) AS network_inventory_quantity,
+    MAX(quantity) FILTER (WHERE quantity >= 0) AS current_inventory_quantity,
+    'MAX_INTEGRATED_STORE_NOT_NETWORK_ON_HAND'::text AS inventory_quantity_basis,
     CASE
         WHEN NOT BOOL_OR(has_inventory_record) THEN 'UNKNOWN_NOT_INTEGRATED'
         WHEN BOOL_OR(quantity > 0) THEN 'IN_STOCK'
@@ -377,7 +372,7 @@ SELECT
         WHEN depletion_events > 0 THEN 'SLOW_CANDIDATE'
         ELSE 'NO_OBSERVED_DEPLETION'
     END AS preliminary_movement_class,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM network;
 
@@ -436,7 +431,7 @@ SELECT
         WHEN valid_units_sold > 0 THEN ROUND(valid_revenue / valid_units_sold, 2)
     END AS average_selling_price,
     CURRENT_DATE - latest_sale_date AS sales_freshness_days,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM network;
 
@@ -486,7 +481,10 @@ SELECT
         s.sales_freshness_days,
         (v.sku IS NOT NULL) AS has_vendor_history,
         (s.sku IS NOT NULL) AS has_store_sales_history,
+        (c.sku ~* '^(CANCELLATION|OVERSIZE[[:space:]]+FEE[0-9]*)$')
+            AS is_non_product_sku,
         CASE
+            WHEN c.sku ~* '^(CANCELLATION|OVERSIZE[[:space:]]+FEE[0-9]*)$' THEN 'NONE'
             WHEN COALESCE(v.valid_depleted_units, 0) >= 100
               AND COALESCE(s.valid_units_sold, 0) = 0
               AND COALESCE(v.valid_depleted_units, 0)
@@ -533,7 +531,7 @@ SELECT
             THEN 'LIKELY_RECOUNTED'
         ELSE 'SEVERE_RECOUNT'
     END AS depletion_credibility_flag,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM base;
 
@@ -568,6 +566,7 @@ SELECT
     kpi_spec_version,
     data_cutoff_date
 FROM analytics.sku_master_intelligence
+WHERE NOT is_non_product_sku
 ORDER BY preliminary_priority_score DESC, sku
 LIMIT 200;
 
@@ -608,7 +607,7 @@ SELECT
     valid_units_sold,
     latest_snapshot_date,
     vendor_freshness_days,
-    'Historical candidate only; current catalog and inventory status not available.'::text AS limitation,
+    'Historical no-movement candidate; current catalog status is attached when mapped. Not dead stock or a demotion list.'::text AS limitation,
     kpi_spec_version,
     data_cutoff_date
 FROM analytics.sku_master_intelligence
@@ -771,7 +770,7 @@ SELECT
         END,
         2
     ) AS source_freshness_score,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM scored;
 
@@ -873,7 +872,7 @@ SELECT
             2
         )
     ) AS data_quality_risk_score,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM rates r
 JOIN analytics.source_freshness_summary f
@@ -1097,7 +1096,7 @@ SELECT
     SUM(m.valid_units_sold) AS valid_units_sold,
     SUM(m.valid_revenue) AS valid_revenue,
     SUM(m.orders) AS orders,
-    '1.0'::text AS kpi_spec_version
+    '1.1'::text AS kpi_spec_version
 FROM analytics.sku_monthly_metrics m
 JOIN analytics.sku_master_intelligence k USING (sku)
 GROUP BY k.inferred_category_segment, m.month_start;
@@ -1112,7 +1111,7 @@ DROP TABLE IF EXISTS analytics.monthly_trend_summary_catalog CASCADE;
 CREATE TABLE analytics.monthly_trend_summary_catalog AS
 SELECT
     COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
+        c.google_product_category,
         k.inferred_category_segment
     ) AS category_segment,
     c.google_product_category IS NOT NULL AS category_is_authoritative,
@@ -1123,13 +1122,13 @@ SELECT
     SUM(m.valid_units_sold) AS valid_units_sold,
     SUM(m.valid_revenue) AS valid_revenue,
     SUM(m.orders) AS orders,
-    '1.0'::text AS kpi_spec_version
+    '1.1'::text AS kpi_spec_version
 FROM analytics.sku_monthly_metrics m
 JOIN analytics.sku_master_intelligence k USING (sku)
 LEFT JOIN analytics.sku_catalog_current c USING (sku)
 GROUP BY
     COALESCE(
-        'GOOGLE_PRODUCT_CATEGORY_' || c.google_product_category,
+        c.google_product_category,
         k.inferred_category_segment
     ),
     c.google_product_category IS NOT NULL,
@@ -1182,7 +1181,7 @@ SELECT
         / NULLIF(t.total_value, 0),
         2
     ) AS concentration_pct,
-    '1.0'::text AS kpi_spec_version,
+    '1.1'::text AS kpi_spec_version,
     CURRENT_DATE AS data_cutoff_date
 FROM ranked r
 JOIN totals t USING (metric)

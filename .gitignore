@@ -15,6 +15,7 @@ htmlcov/
 .idea/
 .vscode/
 *.log
+pipeline/state/
 .DS_Store
 Thumbs.db
 
@@ -39,3 +40,23 @@ conversation_*.txt
 /reports/
 /phase1_achievability_assessment.md
 /phase1_complete_kpi_framework.csv
+
+# Local-only experiments: E: file loaders, thin extracts, other databases.
+pipeline/local_vendor_parse.py
+pipeline/resume_local_upload.py
+pipeline/server_thin_extract.py
+pipeline/load_mssql_thin.py
+pipeline/load_mysql_thin.py
+pipeline/load_published_thin.py
+pipeline/load_missing_parts1.py
+pipeline/generate_data_inventory_report.py
+pipeline/sql/mssql_thin_schema.sql
+pipeline/sql/mysql_thin_schema.sql
+pipeline/sql/published_thin.sql
+pipeline/sql/parts1_*
+evals/
+pipeline/eval_hecta_agent.py
+pipeline/hecta_agent_eval.py
+tests/test_hecta_agent_eval.py
+tests/test_local_vendor_parse.py
+tests/test_mysql_thin.py

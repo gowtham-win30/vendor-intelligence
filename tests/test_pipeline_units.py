@@ -8,7 +8,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PIPELINE_DIR = PROJECT_ROOT / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
 
-from ingest_parts_to_postgres import top_clause  # noqa: E402
+from ingest_parts_to_postgres import (  # noqa: E402
+    is_non_product_sku,
+    merchant_catalog_queries,
+    sales_queries,
+    sql_cast_or_null,
+    top_clause,
+)
 from profile_data_quality import column_policy, trust_status  # noqa: E402
 from validate_phase1_kpis import HECTA_REQUIRED_FIELDS  # noqa: E402
 from validate_phase1_sources import as_date, as_number, compare_metric  # noqa: E402
@@ -43,6 +49,36 @@ def test_smoke_query_limit_clause():
     assert top_clause(1000) == "TOP (1000) "
 
 
+def test_non_product_sku_exclusions():
+    assert is_non_product_sku("CANCELLATION")
+    assert is_non_product_sku("OVERSIZE FEE1")
+    assert is_non_product_sku("oversize fee3")
+    assert not is_non_product_sku("WH22X37840")
+    assert not is_non_product_sku("FEE-BOARD")
+
+
+def test_optional_sql_column_projection():
+    assert sql_cast_or_null(["Weight", "SKU"], "Weight", "float") == "CAST([Weight] AS float)"
+    assert sql_cast_or_null(["SKU"], "Weight", "float") == "CAST(NULL AS float)"
+
+
+def test_sales_ingest_omits_customer_pii():
+    query = sales_queries()["APZ"]
+    assert "CAST(NULL AS varchar(255)) AS customer_email" in query
+    assert "CAST(NULL AS varchar(100)) AS phone" in query
+    assert "CustomerEmail" not in query
+    assert "CustomerFirstName" not in query
+
+
+def test_merchant_sku_prefers_sku_column_when_present():
+    query = merchant_catalog_queries(
+        column_lookup={"dbo.APZMcFeed": ["id", "sku", "mpn", "sale_price"]}
+    )["APZ"]
+    assert "NULLIF(CAST([sku] AS varchar(100)), '')" in query
+    assert "CAST([sale_price] AS float)" in query
+    assert "CAST([mpn] AS varchar(100)) AS mpn" in query
+
+
 def test_required_field_contract_covers_every_hecta_view():
     view_sql = (PIPELINE_DIR / "sql" / "hecta_ready_views.sql").read_text(
         encoding="utf-8"
@@ -61,3 +97,11 @@ def test_required_field_contract_covers_every_hecta_view():
         len(fields) == len(set(fields))
         for fields in HECTA_REQUIRED_FIELDS.values()
     )
+    assert "GOOGLE_PRODUCT_CATEGORY_" not in view_sql
+    assert "current inventory and catalog status are unavailable" not in view_sql
+    assert "analytics_hecta.sales_daily" in view_sql
+    assert "analytics_hecta.sales_weekly" in view_sql
+    assert "analytics_hecta.sales_monthly" in view_sql
+    assert "MAX_INTEGRATED_STORE_NOT_NETWORK_ON_HAND" in (
+        PIPELINE_DIR / "sql" / "clean_and_kpis.sql"
+    ).read_text(encoding="utf-8")

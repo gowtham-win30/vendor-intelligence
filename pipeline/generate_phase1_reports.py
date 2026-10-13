@@ -17,8 +17,8 @@ POSTGRES = {
 }
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
-PIPELINE_VERSION = "1.0.0"
-KPI_SPEC_VERSION = "1.0"
+PIPELINE_VERSION = "1.1.0"
+KPI_SPEC_VERSION = "1.1"
 TRANSFORMATION_LOCK_ID = 8429157302
 
 
@@ -132,6 +132,7 @@ def complete_transformation_run(conn, run_id):
         "analytics.sku_catalog_current",
         "analytics.sku_monthly_metrics",
         "analytics.monthly_trend_summary",
+        "analytics.sales_period_summary",
     )
     with conn.cursor() as cur:
         for relation in relations:
@@ -281,7 +282,7 @@ def print_summary(conn):
         no_movement_candidates = cur.fetchone()[0]
 
     print("\n" + "=" * 60)
-    print("PHASE 1 ANALYTICS SUMMARY (SPEC v1.0)")
+    print(f"PHASE 1 ANALYTICS SUMMARY (SPEC v{KPI_SPEC_VERSION})")
     print("=" * 60)
     print(f"Total unique SKUs analyzed:            {total_skus:,}")
     print(f"Preliminary score >= 90:               {preliminary_focus:,}")
@@ -305,6 +306,7 @@ def main():
             conn,
             (
                 sql_dir / "clean_and_kpis.sql",
+                sql_dir / "sales_period_trends.sql",
                 sql_dir / "hecta_ready_views.sql",
             ),
         )

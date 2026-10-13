@@ -1,60 +1,127 @@
-# Vendor Intelligence Ingestion & Analytics Pipeline
+# Vendor Intelligence Pipeline
 
-This pipeline ingests Phase 1 source data from SQL Server `Parts` into a local Dockerized PostgreSQL database, cleans and deduplicates the raw feeds, and computes Phase 1 KPIs and analytics deliverables.
+SQL Server `Parts` is ingested into PostgreSQL. The pipeline cleans those feeds,
+computes Phase 1 SKU KPIs, and publishes read-only `analytics_hecta` views for
+Hecta. It does not modify Hecta source code.
 
-## Architecture
+This repository is the production pipeline only. Local E: file loaders, thin
+extracts, Excel workbooks, reports, and internal design notes stay on the
+workstation and are gitignored.
 
-1. **Ingestion Layer (`raw`)**: Extracts vendor deltas, sales, latest inventory,
-   and merchant catalog feeds from SQL Server.
-2. **Cleaning & Normalization Layer (`clean`)**: Normalizes keys, preserves quality
-   flags, deduplicates records, and excludes invalid inputs from affected metrics.
-3. **Analytics & Intelligence Layer (`analytics`)**: Pre-computes historical KPIs
-   and current catalog/inventory context.
-4. **Hecta Contract Layer (`analytics_hecta`)**: Exposes documented, read-only,
-   business-facing views without customer PII.
-5. **Audit Layer (`audit`)**: Records ingestion, transformation, and data-profile runs.
-6. **Deliverable Exports (`reports/`)**: Exports versioned analytical and validation
-   evidence.
+## What it does
 
-Production architecture, correctness rules, testing gates, and AI/ML safeguards are maintained
-in the internal engineering framework document (kept outside this repository).
+1. **Ingest** 17 SQL Server tables into `raw` (full replace per source, after
+   staging).
+2. **Clean** into `clean`: normalize SKUs, drop exact duplicates, flag bad
+   dates and quantities, compute `valid_units_depleted` and `valid_revenue`.
+   Customer email, name, phone, and postcode are not copied from SQL Server.
+3. **Analytics** at SKU grain: vendor history, store sales, current catalog
+   and inventory, depletion credibility, priority and gap classes.
+4. **Sales periods** at day / week / month by store and `NETWORK`.
+5. **Hecta views** in `analytics_hecta` only. Hecta must not read `raw` or
+   `clean`.
+6. **Audit** ingestion runs, transformation runs, and column-quality profiles.
 
----
+Vendor depletion is a movement signal, not sales. Cumulative depleted units
+often re-count a standing on-hand gap. Use `depletion_credibility_flag`
+(`PLAUSIBLE` / `LIKELY_RECOUNTED` / `SEVERE_RECOUNT`). HIGH/MODERATE gap and
+`CONSISTENT_RECURRING` require `PLAUSIBLE`. The priority score caps the
+depletion term at peak observed quantity.
 
-## Source Database
+The pipeline does **not** load vendor dealer-price history from local daily
+files, AllPoints monthly lists, competitor scrapes, or fitment tables.
 
-SQL Server connection details are supplied only through environment variables. Host,
-user, and password values must not be committed to this repository.
+## Sources loaded (17)
 
-## Target Database
+| Group | SQL Server tables | Postgres |
+|---|---|---|
+| Vendor qty deltas | `NeucoDelta`, `MetropacDelta`, `ECQtyChanges`, `MsupplyQTYChanges`, `RPDailyQTYChanges` | `raw`/`clean`.vendor_deltas |
+| Store sales | `FESalesData`, `HNCSalesData`, `APZSalesData`, `WTBSalesData` | `raw`/`clean`.sales_orders |
+| Store inventory | `APZLatestData`, `HNCLatestData`, `FELatestData`, `WTBLatestData` | `raw`/`clean`.current_inventory |
+| Merchant catalog | `APZMcFeed`, `HNCMCFeed`, `FEMCDataFeed`, `WTBMCFeed` | `raw`/`clean`.merchant_catalog |
 
-- PostgreSQL container: `vendor_intelligence_postgres`
-- Host: `localhost`
-- Port: `5544`
-- Database: `vendor_intelligence`
-- User: `postgres`
+Neuco is the only delta with `old_price` / `new_price`, and that file ends
+2024-04-17. Inventory and catalog freshness is the load date, not a business
+event date.
 
----
+## How to run
 
-## 1. Start PostgreSQL Container
-
-Copy `.env.example` to `.env` or provide the required values through your deployment
-secret manager. Never commit `.env`.
+Secrets come from `.env` (copy `.env.example`). Never commit `.env`.
 
 ```powershell
-cd C:\Users\DELL\Desktop\Vendor_intelligence
 docker compose --env-file .env -f pipeline/docker-compose.yml up -d
-```
-
----
-
-## 2. Install Dependencies
-
-```powershell
 pip install -r pipeline/requirements.txt
+python pipeline/ingest_parts_to_postgres.py --mode smoke
+python pipeline/ingest_parts_to_postgres.py --mode full
+python pipeline/generate_phase1_reports.py
+python pipeline/validate_phase1_kpis.py
+python pipeline/validate_phase1_sources.py
+python pipeline/profile_data_quality.py
 ```
 
-For development and CI checks:
+`--only vendors|sales|catalog|all` limits ingest. Smoke does not write `raw`.
+Full ingest replaces one source at a time after that source is fully staged.
+
+`generate_phase1_reports.py` runs, in order:
+
+- `pipeline/sql/clean_and_kpis.sql`
+- `pipeline/sql/sales_period_trends.sql`
+- `pipeline/sql/hecta_ready_views.sql`
+
+Then it writes CSVs under `reports/` (local only).
+
+## Hecta
+
+Grant a login role membership in `hecta_catalog_reader` (NOLOGIN). Set
+`search_path=analytics_hecta`.
+
+Connection shape:
+
+`postgresql://hecta_reader:<password>@localhost:5544/vendor_intelligence`
+
+If Hecta runs in Docker, use `host.docker.internal` instead of `localhost`.
+
+Published views:
+
+| View | Grain | Use |
+|---|---|---|
+| `daily_command_center` | one row | Latest totals. Not a prior-period series. |
+| `sku_intelligence` | sku | Historical KPIs plus mapped stock/catalog |
+| `ad_priority_candidates` | sku rank | Review queue, not an ad-spend action |
+| `movement_vs_sales_gap` | sku | HIGH_GAP only when depletion is PLAUSIBLE |
+| `catalog_visibility_candidates` | sku | No observed movement; not dead stock |
+| `sales_daily` / `sales_weekly` / `sales_monthly` | store × period | Observed demand. `NETWORK` is a rollup; do not add it to store rows. Exclude WTB for current demand. |
+| `monthly_trends` | category × month | Mixed depletion + sales; depletion is ungated |
+| `current_catalog` | sku | Listing and stock |
+| `pricing_review_candidates` | sku | Our retail spread, not cost |
+| `source_health` / `data_quality_health` / `column_quality_profile` | source / column | Freshness and missing-value trust |
+
+Regenerate catalog metadata with `python pipeline/export_hecta_catalog_ddl.py`
+(output is local under `docs/`).
+
+## Project layout
+
+```text
+pipeline/
+  ingest_parts_to_postgres.py
+  generate_phase1_reports.py
+  validate_phase1_kpis.py
+  validate_phase1_sources.py
+  profile_data_quality.py
+  export_hecta_catalog_ddl.py
+  sql/
+    init_schema.sql
+    clean_and_kpis.sql
+    sales_period_trends.sql
+    hecta_ready_views.sql
+    validate_phase1_sample.sql
+  docker-compose.yml
+  requirements.txt
+tests/
+.github/workflows/ci.yml
+```
+
+## Tests and CI
 
 ```powershell
 pip install -r requirements-dev.txt
@@ -62,104 +129,15 @@ ruff check .
 pytest
 ```
 
----
+GitHub Actions runs ruff, compileall on `pipeline` and `tests`, pytest,
+Docker Compose config, `pip-audit --strict`, and gitleaks. Source
+reconciliation against SQL Server is a staging gate, not CI.
 
-## 3. Ingest Data (If Running Fresh Extraction)
+## Rules the agent and the views must keep
 
-```powershell
-# Smoke test (1,000 rows per table)
-python pipeline/ingest_parts_to_postgres.py --mode smoke
-
-# Full source-by-source atomic ingestion
-python pipeline/ingest_parts_to_postgres.py --mode full
-
-# Selective source-group reload
-python pipeline/ingest_parts_to_postgres.py --mode full --only sales
-
-# Current inventory and merchant catalog reload
-python pipeline/ingest_parts_to_postgres.py --mode full --only catalog
-```
-
-Smoke mode validates extraction and staging without modifying raw production tables.
-Full mode atomically replaces one source at a time only after its complete extraction
-has been staged successfully.
-
----
-
-## 4. Run Cleaning & Generate Phase 1 Reports
-
-Once raw data exists in PostgreSQL, run:
-
-```powershell
-python pipeline/generate_phase1_reports.py
-```
-
-This runs `pipeline/sql/clean_and_kpis.sql` and generates preliminary Phase 1 analytical outputs into
-`reports/`. Metric definitions and limitations are documented in the internal Phase 1 KPI
-specification (kept outside this repository).
-These outputs support reviewed analyst decisions and are not approved for autonomous action.
-
-## Project Structure
-
-```text
-Vendor_intelligence/
-├── README.md
-├── pipeline/
-│   ├── sql/
-│   ├── docker-compose.yml
-│   ├── requirements.txt
-│   └── *.py
-├── tests/
-└── .github/workflows/
-```
-
-Generated reports:
-
-| Report File | Description |
-| :--- | :--- |
-| `reports/preliminary_top_200_focus_parts.csv` | Prototype ranking using sales, vendor depletion, and historical vendor presence |
-| `reports/preliminary_movement_classification.csv` | Candidate movement classes using unapproved prototype thresholds |
-| `reports/preliminary_movement_vs_sales_gap.csv` | Candidate SKUs with high vendor movement signals and low observed store sales |
-| `reports/no_observed_movement_candidates.csv` | Historical candidates only; not a dead-stock or catalog-demotion decision |
-| `reports/preliminary_category_summary.csv` | Summary using inferred, non-authoritative category assignments |
-| `reports/data_quality_summary.csv` | Duplicate, invalid-date, quantity, and reconciliation indicators |
-
-## 5. Validate Phase 1 Outputs
-
-```powershell
-python pipeline/validate_phase1_kpis.py
-python pipeline/validate_phase1_sources.py
-```
-
-Validation evidence is written to `reports/validation/`. Source validation exits
-with a non-zero status whenever PostgreSQL does not reconcile with SQL Server.
-
-## 6. Profile Missing Values and Column Trust
-
-```powershell
-python pipeline/profile_data_quality.py
-```
-
-The profile is recorded under `audit.data_quality_profile_runs` and
-`audit.data_quality_column_profiles`. Current-run exports are written to:
-
-- `reports/data_quality_missing_values.csv`
-- `reports/data_quality_column_profile.csv`
-- `reports/data_quality_profile_summary.md`
-
-## 7. Hecta Data Catalog Contract
-
-Run `pipeline/generate_phase1_reports.py` after each successful ingestion to publish
-the `analytics_hecta` views. Grant the separately managed Hecta login membership in
-the no-login `hecta_catalog_reader` role. Do not expose internal schemas.
-
-View contracts and interpretation limits are documented in the internal Hecta data catalog
-mapping (kept outside this repository).
-
-## Continuous Integration
-
-GitHub Actions runs linting, compilation, unit tests, Docker Compose validation,
-dependency vulnerability auditing, and secret scanning on pull requests and pushes
-to `main`. Database reconciliation remains an integration gate because it requires
-controlled SQL Server and PostgreSQL credentials; it must run in staging before a
-release is approved.
+- Do not call depletion sales, demand, or lost revenue.
+- Do not treat `LIKELY_RECOUNTED` / `SEVERE_RECOUNT` units as consumption.
+- Zero sales usually means no matched sales row, not dead stock.
+- `current_inventory_quantity` is the largest qty at one store, not network
+  on-hand and not vendor QOH.
+- Do not automate pricing, ads, purchasing, or catalog removal from these views.

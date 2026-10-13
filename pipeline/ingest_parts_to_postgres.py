@@ -1,6 +1,7 @@
 import argparse
 import io
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,6 +95,11 @@ MERCHANT_CATALOG_COLUMNS = [
 ]
 
 INGESTION_LOCK_ID = 8429157301
+NON_PRODUCT_SKU_PATTERN = r"^(CANCELLATION|OVERSIZE\s+FEE\d*)$"
+
+
+def is_non_product_sku(sku):
+    return bool(re.fullmatch(NON_PRODUCT_SKU_PATTERN, str(sku or "").strip(), flags=re.I))
 
 
 def sql_server_driver():
@@ -174,6 +180,51 @@ def ensure_schema(pg_conn):
 
 def top_clause(limit):
     return f"TOP ({int(limit)}) " if limit else ""
+
+
+def sql_identifier(name):
+    return "[" + str(name).replace("]", "]]") + "]"
+
+
+def sql_cast_or_null(available_columns, column_name, sql_type):
+    lookup = {str(name).lower(): name for name in available_columns}
+    actual = lookup.get(column_name.lower())
+    if actual is None:
+        return f"CAST(NULL AS {sql_type})"
+    return f"CAST({sql_identifier(actual)} AS {sql_type})"
+
+
+def sql_server_columns(sql_conn, table):
+    schema_name, table_name = table.split(".", 1)
+    cursor = sql_conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = ?
+              AND TABLE_NAME = ?
+            """,
+            schema_name,
+            table_name,
+        )
+        return [row[0] for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+
+
+def catalog_column_lookup(sql_conn):
+    tables = [
+        "dbo.APZLatestData",
+        "dbo.HNCLatestData",
+        "dbo.FELatestData",
+        "dbo.WTBLatestData",
+        "dbo.APZMcFeed",
+        "dbo.HNCMCFeed",
+        "dbo.FEMCDataFeed",
+        "dbo.WTBMCFeed",
+    ]
+    return {table: sql_server_columns(sql_conn, table) for table in tables}
 
 
 def vendor_queries(limit=None):
@@ -293,17 +344,17 @@ def sales_queries(limit=None):
                 '{store}' AS source_store,
                 '{table}' AS source_table,
                 CAST(increment_id AS varchar(100)) AS order_id,
-                CAST(CustomerEmail AS varchar(255)) AS customer_email,
+                CAST(NULL AS varchar(255)) AS customer_email,
                 UPPER(LTRIM(RTRIM(CAST(SKU AS varchar(100))))) AS sku,
                 CAST(Created_at AS datetime) AS created_at,
                 CAST(qty_ordered AS float) AS qty_ordered,
                 CAST(price AS float) AS price,
                 CAST(region AS varchar(255)) AS region,
-                CAST(postcode AS varchar(100)) AS postcode,
+                CAST(NULL AS varchar(100)) AS postcode,
                 CAST(company AS varchar(255)) AS company,
-                CAST(CustomerFirstName AS varchar(255)) AS customer_first_name,
-                CAST(CustomerLastName AS varchar(255)) AS customer_last_name,
-                CAST(Phone AS varchar(100)) AS phone,
+                CAST(NULL AS varchar(255)) AS customer_first_name,
+                CAST(NULL AS varchar(255)) AS customer_last_name,
+                CAST(NULL AS varchar(100)) AS phone,
                 CAST(Name AS varchar(1000)) AS product_name
             FROM {table}
             WHERE Created_at IS NOT NULL
@@ -313,17 +364,17 @@ def sales_queries(limit=None):
     return queries
 
 
-def inventory_queries(limit=None):
+def inventory_queries(limit=None, column_lookup=None):
     top = top_clause(limit)
     sources = {
-        "APZ": ("dbo.APZLatestData", False),
-        "PartsHNC": ("dbo.HNCLatestData", True),
-        "PartsFE": ("dbo.FELatestData", False),
-        "WTB": ("dbo.WTBLatestData", True),
+        "APZ": "dbo.APZLatestData",
+        "PartsHNC": "dbo.HNCLatestData",
+        "PartsFE": "dbo.FELatestData",
+        "WTB": "dbo.WTBLatestData",
     }
     queries = {}
-    for store, (table, has_weight) in sources.items():
-        weight = "CAST(Weight AS float)" if has_weight else "CAST(NULL AS float)"
+    for store, table in sources.items():
+        columns = (column_lookup or {}).get(table, ())
         queries[store] = f"""
             SELECT {top}
                 '{store}' AS source_store,
@@ -334,7 +385,7 @@ def inventory_queries(limit=None):
                 CAST(Quantity AS float) AS quantity,
                 CAST(Price AS float) AS price,
                 CAST(ListPrice AS float) AS list_price,
-                {weight} AS weight
+                {sql_cast_or_null(columns, "Weight", "float")} AS weight
             FROM {table}
             WHERE SKU IS NOT NULL
               AND LTRIM(RTRIM(CAST(SKU AS varchar(100)))) != ''
@@ -342,52 +393,35 @@ def inventory_queries(limit=None):
     return queries
 
 
-def merchant_catalog_queries(limit=None):
+def merchant_catalog_queries(limit=None, column_lookup=None):
     top = top_clause(limit)
     sources = {
-        "APZ": ("dbo.APZMcFeed", "name", False),
-        "PartsHNC": ("dbo.HNCMCFeed", "name", False),
-        "PartsFE": ("dbo.FEMCDataFeed", "name", False),
-        "WTB": ("dbo.WTBMCFeed", "title", True),
+        "APZ": ("dbo.APZMcFeed", "name"),
+        "PartsHNC": ("dbo.HNCMCFeed", "name"),
+        "PartsFE": ("dbo.FEMCDataFeed", "name"),
+        "WTB": ("dbo.WTBMCFeed", "title"),
     }
     queries = {}
-    for store, (table, product_name, is_wtb) in sources.items():
-        sale_price = "CAST(sale_price AS float)" if is_wtb else "CAST(NULL AS float)"
-        shipment_weight = (
-            "CAST(shipment_weight AS float)" if is_wtb else "CAST(NULL AS float)"
-        )
-        status_value = (
-            "CAST(status_value AS int)"
-            if table == "dbo.FEMCDataFeed"
-            else "CAST(NULL AS int)"
-        )
-        product_detail = (
-            "CAST(product_detail AS varchar(max))"
-            if is_wtb
-            else "CAST(NULL AS varchar(max))"
-        )
-        custom_label = (
-            "CAST(custom_label_0 AS varchar(255))"
-            if is_wtb
-            else "CAST(NULL AS varchar(255))"
-        )
-        shipping = (
-            "CAST(shipping AS varchar(max))"
-            if is_wtb
-            else "CAST(NULL AS varchar(max))"
+    for store, (table, product_name) in sources.items():
+        columns = (column_lookup or {}).get(table, ())
+        store_sku = (
+            "COALESCE("
+            f"NULLIF({sql_cast_or_null(columns, 'sku', 'varchar(100)')}, ''), "
+            "CAST(id AS varchar(100))"
+            ")"
         )
         queries[store] = f"""
             SELECT {top}
                 '{store}' AS source_store,
                 '{table}' AS source_table,
-                UPPER(LTRIM(RTRIM(CAST(id AS varchar(100))))) AS sku,
-                UPPER(LTRIM(RTRIM(CAST(mpn AS varchar(100))))) AS mpn,
+                UPPER(LTRIM(RTRIM({store_sku}))) AS sku,
+                {sql_cast_or_null(columns, "mpn", "varchar(100)")} AS mpn,
                 CAST({product_name} AS varchar(1000)) AS product_name,
                 CAST(description AS varchar(max)) AS description,
                 CAST(link AS varchar(2000)) AS product_link,
                 CAST(image_link AS varchar(2000)) AS image_link,
                 CAST(price AS float) AS price,
-                {sale_price} AS sale_price,
+                {sql_cast_or_null(columns, "sale_price", "float")} AS sale_price,
                 UPPER(LTRIM(RTRIM(CAST(brand AS varchar(255))))) AS brand,
                 UPPER(LTRIM(RTRIM(CAST(availability AS varchar(100)))))
                     AS availability,
@@ -395,14 +429,17 @@ def merchant_catalog_queries(limit=None):
                 CAST(google_product_category AS varchar(255))
                     AS google_product_category,
                 CAST(product_type AS varchar(1000)) AS product_type,
-                {shipment_weight} AS shipment_weight,
-                {status_value} AS status_value,
-                {product_detail} AS product_detail,
-                {custom_label} AS custom_label_0,
-                {shipping} AS shipping
+                {sql_cast_or_null(columns, "shipment_weight", "float")}
+                    AS shipment_weight,
+                {sql_cast_or_null(columns, "status_value", "int")} AS status_value,
+                {sql_cast_or_null(columns, "product_detail", "varchar(max)")}
+                    AS product_detail,
+                {sql_cast_or_null(columns, "custom_label_0", "varchar(255)")}
+                    AS custom_label_0,
+                {sql_cast_or_null(columns, "shipping", "varchar(max)")} AS shipping
             FROM {table}
-            WHERE id IS NOT NULL
-              AND LTRIM(RTRIM(CAST(id AS varchar(100)))) != ''
+            WHERE {store_sku} IS NOT NULL
+              AND LTRIM(RTRIM({store_sku})) != ''
         """
     return queries
 
@@ -614,7 +651,8 @@ def main():
                 )
 
         if args.only in ("catalog", "all"):
-            for source, query in inventory_queries(limit).items():
+            column_lookup = catalog_column_lookup(sql_conn)
+            for source, query in inventory_queries(limit, column_lookup).items():
                 total_rows += ingest_query(
                     sql_conn,
                     pg_conn,
@@ -627,7 +665,7 @@ def main():
                     args.chunk_size,
                     publish,
                 )
-            for source, query in merchant_catalog_queries(limit).items():
+            for source, query in merchant_catalog_queries(limit, column_lookup).items():
                 total_rows += ingest_query(
                     sql_conn,
                     pg_conn,

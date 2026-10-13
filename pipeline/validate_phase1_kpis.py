@@ -51,6 +51,27 @@ HECTA_REQUIRED_FIELDS = {
         "category_is_authoritative",
         "kpi_spec_version",
     ),
+    "sales_daily": (
+        "sale_date",
+        "source_store",
+        "kpi_spec_version",
+        "data_cutoff_date",
+        "usage_limitation",
+    ),
+    "sales_weekly": (
+        "week_start",
+        "source_store",
+        "kpi_spec_version",
+        "data_cutoff_date",
+        "usage_limitation",
+    ),
+    "sales_monthly": (
+        "month_start",
+        "source_store",
+        "kpi_spec_version",
+        "data_cutoff_date",
+        "usage_limitation",
+    ),
     "source_health": (
         "source_type",
         "source_name",
@@ -74,6 +95,7 @@ HECTA_REQUIRED_FIELDS = {
         "sku",
         "current_inventory_status",
         "current_catalog_status",
+        "inventory_quantity_basis",
         "source_loaded_at",
         "data_cutoff_date",
     ),
@@ -217,7 +239,10 @@ def validate_results(conn):
                     ('data_quality_health'),
                     ('current_catalog'),
                     ('pricing_review_candidates'),
-                    ('column_quality_profile')
+                    ('column_quality_profile'),
+                    ('sales_daily'),
+                    ('sales_weekly'),
+                    ('sales_monthly')
             ) AS expected(table_name)
             LEFT JOIN information_schema.views v
               ON v.table_schema = 'analytics_hecta'
@@ -268,6 +293,24 @@ def validate_results(conn):
                     = (
                         SELECT COUNT(*)
                         FROM analytics.monthly_trend_summary_catalog
+                    ),
+                (SELECT COUNT(*) FROM analytics_hecta.sales_daily)
+                    = (
+                        SELECT COUNT(*)
+                        FROM analytics.sales_period_summary
+                        WHERE period_grain = 'DAY'
+                    ),
+                (SELECT COUNT(*) FROM analytics_hecta.sales_weekly)
+                    = (
+                        SELECT COUNT(*)
+                        FROM analytics.sales_period_summary
+                        WHERE period_grain = 'WEEK'
+                    ),
+                (SELECT COUNT(*) FROM analytics_hecta.sales_monthly)
+                    = (
+                        SELECT COUNT(*)
+                        FROM analytics.sales_period_summary
+                        WHERE period_grain = 'MONTH'
                     ),
                 (SELECT COUNT(*) FROM analytics_hecta.current_catalog)
                     = (SELECT COUNT(*) FROM analytics.sku_catalog_current),
