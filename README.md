@@ -28,8 +28,9 @@ often re-count a standing on-hand gap. Use `depletion_credibility_flag`
 `CONSISTENT_RECURRING` require `PLAUSIBLE`. The priority score caps the
 depletion term at peak observed quantity.
 
-The pipeline does **not** load vendor dealer-price history from local daily
-files, AllPoints monthly lists, competitor scrapes, or fitment tables.
+A second, optional job copies sales and vendor quantity from `Parts` into
+SQL Server `Parts1` and uploads local daily vendor files. That job does not
+use PostgreSQL. See `pipeline/parts1/README.md`.
 
 ## Sources loaded (17)
 
@@ -109,6 +110,7 @@ pipeline/
   validate_phase1_sources.py
   profile_data_quality.py
   export_hecta_catalog_ddl.py
+  parts1/                  # Parts -> Parts1 + local E: files
   sql/
     init_schema.sql
     clean_and_kpis.sql
